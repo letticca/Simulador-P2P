@@ -1,6 +1,7 @@
 import json
 import random
 import networkx as nx
+from collections import deque
 import matplotlib.pyplot as plt
 from matplotlib.widgets import TextBox, RadioButtons, Button
 
@@ -62,7 +63,7 @@ class P2PNetwork:
         if not nx.is_connected(self.graph):
             raise ValueError("Erro: A rede está particionada. Existem nos isolados.")
             
-        print(">> Validação concluída com sucesso: A topologia da rede atende a todos os requisitos.")
+        print(">> Validaçao concluída com sucesso: A topologia da rede atende a todos os requisitos.")
         return True
 
     def draw_topology_with_gui(self):
@@ -75,7 +76,7 @@ class P2PNetwork:
         # Espreme o eixo principal (o grafo) para a direita para abrir espaço para o menu
         plt.subplots_adjust(left=0.35)
         
-        # --- 1. RENDERIZAÇÃO DO GRAFO (No eixo direito) ---
+        #1. Renderizacao do grafo (No eixo direito) 
         pos = nx.spring_layout(self.graph, seed=42) 
         nx.draw_networkx_edges(self.graph, pos, ax=self.ax, edge_color='#cccccc', width=2.0)
         nx.draw_networkx_nodes(self.graph, pos, ax=self.ax, node_color='skyblue', node_size=2000)
@@ -89,7 +90,7 @@ class P2PNetwork:
         self.ax.set_title("Topologia da Rede P2P", fontsize=16, fontweight='bold')
         self.ax.axis('off') 
 
-        # --- 2. RENDERIZAÇÃO DO MENU LATERAL (Nos 35% da esquerda) ---
+        # 2. Renderizacao do Menu na lateral
         
         # [Coordenada X, Coordenada Y, Largura, Altura] - Valores de 0.0 a 1.0
         ax_node = plt.axes([0.1, 0.75, 0.15, 0.05])
@@ -107,7 +108,6 @@ class P2PNetwork:
         ax_btn = plt.axes([0.1, 0.2, 0.15, 0.08])
         self.btn_search = Button(ax_btn, 'INICIAR BUSCA', color='lightgreen', hovercolor='palegreen')
 
-        # --- 3. MECÂNICA DE CALLBACK (Ação do Botão) ---
         def submit_search(event):
             # Coleta os valores digitados nas caixas de texto
             node = self.txt_node.text.strip()
@@ -121,14 +121,12 @@ class P2PNetwork:
                 return
                 
             print("\n" + "="*60)
-            # Aciona a função central de busca que já tínhamos criado
             self.search(node_id=node, resource_id=res, ttl=ttl_val, algo=algo)
             print("="*60)
 
         # Conecta o clique do botão à função de execução
         self.btn_search.on_clicked(submit_search)
         
-        # Remove a thread que criamos no main e exibe a tela normal
         plt.show()
 
     def search(self, node_id, resource_id, ttl, algo):
@@ -159,8 +157,7 @@ class P2PNetwork:
             print(f"Algoritmo '{algo}' não reconhecido.")
             return None
 
-        # --- A MÁGICA DO CACHE ACONTECE AQUI ---
-        # Se encontrou o recurso, todos os nós que participaram dessa busca "aprendem" a localização
+        # Cache
         if stats['found']:
             target = stats['found_at']
             for v_node in stats['visited_nodes']:
@@ -176,40 +173,36 @@ class P2PNetwork:
         return stats
     
     def _flooding(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Inundação com processamento concorrente e descarte por loop."""
-        # A fila continua sendo nosso motor de paralelismo
-        queue = [(start_node, ttl)]
+        """Mecânica de Inundação (BFS) otimizada com deque e marcação antecipada."""
+        queue = deque([(start_node, ttl)])
+        # Marcar como visitado NA INSERÇÃO previne que o mesmo nó seja enfileirado múltiplas vezes
+        stats['visited_nodes'].add(start_node)
         
         while queue:
-            current_node, current_ttl = queue.pop(0)
-            
-            # 1. A DETECÇÃO DE LOOP: A mensagem chegou. O nó já viu essa busca antes?
-            if current_node in stats['visited_nodes']:
-                print(f"  -> [Loop Drop] No {current_node} descartou a mensagem (ja processada).")
-                continue # Interrompe apenas esta ramificação, as outras continuam!
-                
-            # Se é a primeira vez, ele registra que viu a mensagem
-            stats['visited_nodes'].add(current_node)
+            current_node, current_ttl = queue.popleft()
             node = self.nodes[current_node]
             print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
 
-            # 2. O SUCESSO: Achou o recurso, mas não mata a rede inteira
+            # 1. Verificacao de sucesso
             if resource_id in node.resources:
                 stats['found'] = True
                 stats['found_at'] = current_node
-                print(f"  -> [Sucesso] Encontrado em {current_node}! (As outras ramificaçoes continuam até o TTL zerar)")
-                # Um nó que tem o recurso não repassa a busca para frente, mas o loop while continua
+                print(f"  -> [Sucesso] Recurso '{resource_id}' localizado em {current_node}!")
                 continue
 
+            # 2. Verificacao de TTL 
             if current_ttl <= 0:
                 print(f"  -> [Drop] TTL zerado no no {current_node}.")
                 continue
 
-            # 3. A INUNDAÇÃO: Envia para TODOS os vizinhos cegamente. 
-            # O custo da mensagem é cobrado aqui.
+            # 3. Inundacao
             for neighbor_id in node.neighbors:
-                stats['messages_exchanged'] += 1
-                queue.append((neighbor_id, current_ttl - 1))
+                if neighbor_id not in stats['visited_nodes']:
+                    stats['visited_nodes'].add(neighbor_id) # Marca imediatamente
+                    stats['messages_exchanged'] += 1
+                    queue.append((neighbor_id, current_ttl - 1))
+                else:
+                    pass
 
     def _random_walk(self, start_node, resource_id, ttl, stats):
         """Mecânica de Passeio Aleatório com rastreamento de caminho e Backtracking."""
@@ -221,7 +214,7 @@ class P2PNetwork:
         stats['visited_nodes'].add(start_node)
         
         while path_stack and current_ttl > 0:
-            # Olha sempre para o topo da pilha (o nó onde a mensagem está agora)
+            # Olha sempre para o topo da pilha 
             current_node = path_stack[-1]
             node = self.nodes[current_node]
             
@@ -231,7 +224,7 @@ class P2PNetwork:
                 stats['found'] = True
                 stats['found_at'] = current_node
                 print(f"  -> [Sucesso] Recurso '{resource_id}' localizado em {current_node}!")
-                return # No RW, o caminho é único, então achar o recurso finaliza a busca
+                return
 
             # Descobre quem são os vizinhos que ainda não viram essa mensagem
             valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
@@ -257,45 +250,41 @@ class P2PNetwork:
                     print(f"  -> [Backtrack] Beco sem saída em {current_node}. Recuando para {previous_node}")
 
     def _informed_flooding(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Inundação Informada com paralelismo, descarte de loop e atalho de cache."""
-        queue = [(start_node, ttl)]
+        """Mecânica de Inundação Informada com otimização de deque e atalho de cache."""
+        queue = deque([(start_node, ttl)])
+        stats['visited_nodes'].add(start_node)
         
         while queue:
-            current_node, current_ttl = queue.pop(0)
-            
-            # 1. DETECÇÃO DE LOOP: Impede o processamento infinito da mesma mensagem
-            if current_node in stats['visited_nodes']:
-                print(f"  -> [Loop Drop] Nó {current_node} descartou a mensagem (já processada).")
-                continue
-                
-            stats['visited_nodes'].add(current_node)
+            current_node, current_ttl = queue.popleft()
             node = self.nodes[current_node]
             print(f"  -> [Trace] Nó {current_node} processando (TTL: {current_ttl})")
 
-            # 2. O ATALHO (BUSCA INFORMADA): Consulta o cache antes de inundar
+            # 1. Atalho de Cache
             if resource_id in node.cache:
                 target_node = node.cache[resource_id]
                 stats['found'] = True
                 stats['found_at'] = target_node
-                stats['messages_exchanged'] += 1 # Custo de 1 mensagem para o salto direto
-                print(f"  -> [Cache HIT] Nó {current_node} sabe que '{resource_id}' está em {target_node}! Salto direto executado.")
-                continue # Permite que outras ramificações em voo continuem
+                stats['messages_exchanged'] += 1 
+                print(f"  -> [Cache HIT] Nó {current_node} redireciona busca diretamente para {target_node}!")
+                continue # Não propaga cegamente se o cache já resolveu
 
-            # 3. VERIFICAÇÃO LOCAL: O recurso está no próprio nó?
+            # 2. Verificacao Local
             if resource_id in node.resources:
                 stats['found'] = True
                 stats['found_at'] = current_node
                 print(f"  -> [Sucesso] Recurso '{resource_id}' localizado fisicamente em {current_node}!")
-                continue # Permite que outras ramificações continuem
-
-            if current_ttl <= 0:
-                print(f"  -> [Drop] TTL zerado no nó {current_node}.")
                 continue
 
-            # 4. A INUNDAÇÃO: Se não está no cache e nem localmente, espalha para os vizinhos
+            # 3.Verificacao TTL
+            if current_ttl <= 0:
+                continue
+
+            # 4. Propagacao
             for neighbor_id in node.neighbors:
-                stats['messages_exchanged'] += 1
-                queue.append((neighbor_id, current_ttl - 1))
+                if neighbor_id not in stats['visited_nodes']:
+                    stats['visited_nodes'].add(neighbor_id)
+                    stats['messages_exchanged'] += 1
+                    queue.append((neighbor_id, current_ttl - 1))
 
     def _informed_random_walk(self, start_node, resource_id, ttl, stats):
         """Mecânica de Passeio Aleatório Informado com Backtracking e atalho de cache."""
@@ -307,29 +296,29 @@ class P2PNetwork:
             current_node = path_stack[-1]
             node = self.nodes[current_node]
             
-            print(f"  -> [Trace] Nó {current_node} processando (TTL: {current_ttl})")
+            print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
 
-            # 1. O ATALHO (BUSCA INFORMADA): Consulta o cache primeiro
+            # 1. Consulta o cache primeiro
             if resource_id in node.cache:
                 target_node = node.cache[resource_id]
                 stats['found'] = True
                 stats['found_at'] = target_node
                 stats['messages_exchanged'] += 1
-                print(f"  -> [Cache HIT] Nó {current_node} sabe que '{resource_id}' está em {target_node}! Salto direto executado.")
-                return # No RW, como existe apenas um caminho, a busca acaba ao encontrar o recurso
+                print(f"  -> [Cache HIT] No {current_node} sabe que '{resource_id}' está em {target_node}! Salto direto executado.")
+                return 
 
-            # 2. VERIFICAÇÃO LOCAL
+            # 2. Verificacao Local
             if resource_id in node.resources:
                 stats['found'] = True
                 stats['found_at'] = current_node
                 print(f"  -> [Sucesso] Recurso '{resource_id}' localizado fisicamente em {current_node}!")
                 return
 
-            # 3. MAPEAMENTO DE CAMINHOS VÁLIDOS
+            # 3.Mapeia caminhos validos
             valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
             
             if valid_neighbors:
-                # AVANÇO: Sorteia, consome TTL/mensagens e empilha
+                #Avanco
                 next_node = random.choice(valid_neighbors)
                 stats['visited_nodes'].add(next_node)
                 stats['messages_exchanged'] += 1
@@ -396,8 +385,7 @@ def interactive_menu(p2p_network):
         if algo_choice not in algo_map and algo_choice not in algo_map.values():
             print("Erro: Escolha de algoritmo inválida.")
             continue
-            
-        # Se o usuário digitou '1', converte para 'flooding'. Se digitou 'flooding', mantém.
+    
         algo = algo_map.get(algo_choice, algo_choice)
 
         # Executa a busca com os dados fornecidos
@@ -415,7 +403,6 @@ if __name__ == "__main__":
         p2p.validate_network()
         
         print("Abrindo simulador com painel lateral...")
-        # Essa chamada agora segura o programa e renderiza tudo junto
         p2p.draw_topology_with_gui()
         
     except FileNotFoundError:
