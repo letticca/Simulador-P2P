@@ -173,13 +173,13 @@ class P2PNetwork:
         return stats
     
     def _flooding(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Inundação (BFS) otimizada com deque e marcação antecipada."""
-        queue = deque([(start_node, ttl)])
-        # Marcar como visitado NA INSERÇÃO previne que o mesmo nó seja enfileirado múltiplas vezes
+        """Mecanica de Inundacao (BFS) otimizada com deque e marcacao antecipada."""
+        # CORREÇÃO: A fila agora guarda (no_atual, ttl_atual, no_pai)
+        queue = deque([(start_node, ttl, None)])
         stats['visited_nodes'].add(start_node)
         
         while queue:
-            current_node, current_ttl = queue.popleft()
+            current_node, current_ttl, parent_node = queue.popleft()
             node = self.nodes[current_node]
             print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
 
@@ -197,67 +197,29 @@ class P2PNetwork:
 
             # 3. Inundacao
             for neighbor_id in node.neighbors:
+                # CORREÇÃO: Se o vizinho for quem enviou a mensagem, ignore-o completamente
+                if neighbor_id == parent_node:
+                    continue
+
                 if neighbor_id not in stats['visited_nodes']:
-                    stats['visited_nodes'].add(neighbor_id) # Marca imediatamente
+                    print(f"  -> [Propagacao] No {current_node} envia mensagem para o No {neighbor_id}")
+                    stats['visited_nodes'].add(neighbor_id)
                     stats['messages_exchanged'] += 1
-                    queue.append((neighbor_id, current_ttl - 1))
+                    # O current_node passa a ser o parent_node da próxima iteração
+                    queue.append((neighbor_id, current_ttl - 1, current_node))
                 else:
-                    pass
-
-    def _random_walk(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Passeio Aleatório com rastreamento de caminho e Backtracking."""
-        # A pilha substitui a variável única de current_node
-        path_stack = [start_node] 
-        current_ttl = ttl
-        
-        # O nó inicial já é marcado para não receber a mensagem de volta logo no primeiro salto
-        stats['visited_nodes'].add(start_node)
-        
-        while path_stack and current_ttl > 0:
-            # Olha sempre para o topo da pilha 
-            current_node = path_stack[-1]
-            node = self.nodes[current_node]
-            
-            print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
-
-            if resource_id in node.resources:
-                stats['found'] = True
-                stats['found_at'] = current_node
-                print(f"  -> [Sucesso] Recurso '{resource_id}' localizado em {current_node}!")
-                return
-
-            # Descobre quem são os vizinhos que ainda não viram essa mensagem
-            valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
-            
-            if valid_neighbors:
-                # O AVANÇO: Sorteia um caminho válido, consome recursos e empilha o novo nó
-                next_node = random.choice(valid_neighbors)
-                stats['visited_nodes'].add(next_node)
-                stats['messages_exchanged'] += 1
-                current_ttl -= 1
-                
-                path_stack.append(next_node)
-                print(f"  -> [Avanço] Enviando de {current_node} para {next_node}")
-            else:
-                # O BACKTRACKING: Beco sem saída. Retira o nó inútil do topo da pilha.
-                path_stack.pop() 
-                
-                # Se a pilha não ficou vazia, significa que podemos recuar para o nó anterior
-                if path_stack:
-                    previous_node = path_stack[-1]
-                    stats['messages_exchanged'] += 1
-                    current_ttl -= 1
-                    print(f"  -> [Backtrack] Beco sem saída em {current_node}. Recuando para {previous_node}")
+                    print(f"  -> [Descarte] No {current_node} enviou para {neighbor_id}, mas {neighbor_id} ja foi visitado. Nao propaga.")
 
     def _informed_flooding(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Inundação Informada com otimização de deque e atalho de cache."""
-        queue = deque([(start_node, ttl)])
+        """Mecanica de Inundacao Informada com otimizacao de deque e atalho de cache."""
+        # CORREÇÃO: A fila agora guarda (no_atual, ttl_atual, no_pai)
+        queue = deque([(start_node, ttl, None)])
         stats['visited_nodes'].add(start_node)
         
         while queue:
-            current_node, current_ttl = queue.popleft()
+            current_node, current_ttl, parent_node = queue.popleft()
             node = self.nodes[current_node]
-            print(f"  -> [Trace] Nó {current_node} processando (TTL: {current_ttl})")
+            print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
 
             # 1. Atalho de Cache
             if resource_id in node.cache:
@@ -265,8 +227,8 @@ class P2PNetwork:
                 stats['found'] = True
                 stats['found_at'] = target_node
                 stats['messages_exchanged'] += 1 
-                print(f"  -> [Cache HIT] Nó {current_node} redireciona busca diretamente para {target_node}!")
-                continue # Não propaga cegamente se o cache já resolveu
+                print(f"  -> [Cache HIT] No {current_node} redireciona busca diretamente para {target_node}!")
+                continue
 
             # 2. Verificacao Local
             if resource_id in node.resources:
@@ -277,63 +239,180 @@ class P2PNetwork:
 
             # 3.Verificacao TTL
             if current_ttl <= 0:
+                print(f"  -> [Drop] TTL zerado no no {current_node}.")
                 continue
 
             # 4. Propagacao
             for neighbor_id in node.neighbors:
+                # CORREÇÃO: Se o vizinho for quem enviou a mensagem, ignore-o completamente
+                if neighbor_id == parent_node:
+                    continue
+
                 if neighbor_id not in stats['visited_nodes']:
+                    print(f"  -> [Propagacao] No {current_node} envia mensagem para o No {neighbor_id}")
                     stats['visited_nodes'].add(neighbor_id)
                     stats['messages_exchanged'] += 1
-                    queue.append((neighbor_id, current_ttl - 1))
-
-    def _informed_random_walk(self, start_node, resource_id, ttl, stats):
-        """Mecânica de Passeio Aleatório Informado com Backtracking e atalho de cache."""
-        path_stack = [start_node] 
-        current_ttl = ttl
+                    queue.append((neighbor_id, current_ttl - 1, current_node))
+                else:
+                    print(f"  -> [Descarte] No {current_node} enviou para {neighbor_id}, mas {neighbor_id} ja foi visitado. Nao propaga.")
+    def _random_walk(self, start_node, resource_id, ttl, stats):
+        """Mecânica de Passeio Aleatório (DFS Limitado) com Backtracking e Raio de Profundidade."""
+        # A pilha agora guarda o estado do nó E o TTL disponível naquele momento
+        path_stack = [(start_node, ttl)] 
         stats['visited_nodes'].add(start_node)
         
-        while path_stack and current_ttl > 0:
-            current_node = path_stack[-1]
+        # Memória para não reprocessar o recurso do nó na volta do backtrack
+        processed_nodes = set()
+
+        while path_stack:
+            # Observa o topo da pilha (Nó atual e quanto TTL ele tem)
+            current_node, current_ttl = path_stack[-1]
             node = self.nodes[current_node]
             
-            print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
+            # 1. INSPEÇÃO: Consulta os recursos apenas na primeira vez que passa aqui
+            if current_node not in processed_nodes:
+                print(f"  -> [Trace] Nó {current_node} processando (TTL: {current_ttl})")
+                processed_nodes.add(current_node)
 
-            # 1. Consulta o cache primeiro
-            if resource_id in node.cache:
-                target_node = node.cache[resource_id]
-                stats['found'] = True
-                stats['found_at'] = target_node
-                stats['messages_exchanged'] += 1
-                print(f"  -> [Cache HIT] No {current_node} sabe que '{resource_id}' está em {target_node}! Salto direto executado.")
-                return 
+                if resource_id in node.resources:
+                    stats['found'] = True
+                    stats['found_at'] = current_node
+                    print(f"  -> [Sucesso] Recurso '{resource_id}' localizado em {current_node}!")
+                    return
 
-            # 2. Verificacao Local
-            if resource_id in node.resources:
-                stats['found'] = True
-                stats['found_at'] = current_node
-                print(f"  -> [Sucesso] Recurso '{resource_id}' localizado fisicamente em {current_node}!")
-                return
+            # 2. VERIFICAÇÃO DE TTL: Limite de profundidade atingido para este ramo
+            if current_ttl <= 0:
+                print(f"  -> [Drop] Limite de profundidade (TTL=0) atingido em {current_node}. Recuando.")
+                path_stack.pop() # Remove este nó inútil da pilha
+                continue         # Volta para o início do laço (que agora lerá o pai com o TTL preservado)
 
-            # 3.Mapeia caminhos validos
+            # 3. MAPEAMENTO: Descobre quem são os vizinhos ainda não visitados na rede
             valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
             
             if valid_neighbors:
-                #Avanco
+                # AVANÇO: Sorteia um caminho, consome 1 de TTL e empilha
                 next_node = random.choice(valid_neighbors)
                 stats['visited_nodes'].add(next_node)
                 stats['messages_exchanged'] += 1
-                current_ttl -= 1
                 
-                path_stack.append(next_node)
+                path_stack.append((next_node, current_ttl - 1))
                 print(f"  -> [Avanço] Enviando de {current_node} para {next_node}")
             else:
-                # BACKTRACKING: Beco sem saída, recua consumindo TTL/mensagens
+                # BACKTRACKING FÍSICO: Não há mais vizinhos. O pacote avisa o pai e recua.
+                path_stack.pop() 
+                
+                if path_stack:
+                    previous_node, _ = path_stack[-1]
+                    stats['messages_exchanged'] += 1
+                    print(f"  -> [Backtrack] Beco sem saída em {current_node}. Recuando para {previous_node}")
+
+    def _random_walk(self, start_node, resource_id, ttl, stats):
+        """Mecanica de Passeio Aleatorio (DFS Limitado) com Backtracking e Raio de Profundidade."""
+        # A pilha agora guarda o estado do no E o TTL disponivel naquele momento
+        path_stack = [(start_node, ttl)] 
+        stats['visited_nodes'].add(start_node)
+        
+        # Memoria para nao reprocessar o recurso do no na volta do backtrack
+        processed_nodes = set()
+
+        while path_stack:
+            # Observa o topo da pilha (No atual e quanto TTL ele tem)
+            current_node, current_ttl = path_stack[-1]
+            node = self.nodes[current_node]
+            
+            # 1. INSPECAO: Consulta os recursos apenas na primeira vez que passa aqui
+            if current_node not in processed_nodes:
+                print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
+                processed_nodes.add(current_node)
+
+                if resource_id in node.resources:
+                    stats['found'] = True
+                    stats['found_at'] = current_node
+                    print(f"  -> [Sucesso] Recurso '{resource_id}' localizado em {current_node}!")
+                    return
+
+            # 2. VERIFICACAO DE TTL: Limite de profundidade atingido para este ramo
+            if current_ttl <= 0:
+                print(f"  -> [Drop] Limite de profundidade (TTL=0) atingido em {current_node}. Recuando.")
+                path_stack.pop() # Remove este no inutil da pilha
+                continue         # Volta para o inicio do laco (que agora lera o pai com o TTL preservado)
+
+            # 3. MAPEAMENTO: Descobre quem sao os vizinhos ainda nao visitados na rede
+            valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
+            
+            if valid_neighbors:
+                # AVANCO: Sorteia um caminho, consome 1 de TTL e empilha
+                next_node = random.choice(valid_neighbors)
+                stats['visited_nodes'].add(next_node)
+                stats['messages_exchanged'] += 1
+                
+                path_stack.append((next_node, current_ttl - 1))
+                print(f"  -> [Avanco] Enviando de {current_node} para {next_node}")
+            else:
+                # BACKTRACKING FISICO: Nao ha mais vizinhos. O pacote avisa o pai e recua.
+                path_stack.pop() 
+                
+                if path_stack:
+                    previous_node, _ = path_stack[-1]
+                    stats['messages_exchanged'] += 1
+                    print(f"  -> [Backtrack] Beco sem saida em {current_node}. Recuando para {previous_node}")
+
+    def _informed_random_walk(self, start_node, resource_id, ttl, stats):
+        """Mecanica de Passeio Aleatorio Informado (DFS Limitado) com Backtracking e atalho de cache."""
+        path_stack = [(start_node, ttl)] 
+        stats['visited_nodes'].add(start_node)
+        processed_nodes = set()
+        
+        while path_stack:
+            current_node, current_ttl = path_stack[-1]
+            node = self.nodes[current_node]
+            
+            # 1. INSPECAO
+            if current_node not in processed_nodes:
+                print(f"  -> [Trace] No {current_node} processando (TTL: {current_ttl})")
+                processed_nodes.add(current_node)
+
+                # Cache
+                if resource_id in node.cache:
+                    target_node = node.cache[resource_id]
+                    stats['found'] = True
+                    stats['found_at'] = target_node
+                    stats['messages_exchanged'] += 1
+                    print(f"  -> [Cache HIT] No {current_node} sabe que '{resource_id}' esta em {target_node}! Salto direto executado.")
+                    return 
+
+                # Recursos Locais
+                if resource_id in node.resources:
+                    stats['found'] = True
+                    stats['found_at'] = current_node
+                    print(f"  -> [Sucesso] Recurso '{resource_id}' localizado fisicamente em {current_node}!")
+                    return
+
+            # 2. VERIFICACAO DE TTL
+            if current_ttl <= 0:
+                print(f"  -> [Drop] Limite de profundidade (TTL=0) atingido em {current_node}. Recuando.")
+                path_stack.pop()
+                continue
+
+            # 3. MAPEAMENTO
+            valid_neighbors = [n for n in node.neighbors if n not in stats['visited_nodes']]
+            
+            if valid_neighbors:
+                # AVANCO
+                next_node = random.choice(valid_neighbors)
+                stats['visited_nodes'].add(next_node)
+                stats['messages_exchanged'] += 1
+                
+                path_stack.append((next_node, current_ttl - 1))
+                print(f"  -> [Avanco] Enviando de {current_node} para {next_node}")
+            else:
+                # BACKTRACKING
                 path_stack.pop() 
                 if path_stack:
-                    previous_node = path_stack[-1]
+                    previous_node, _ = path_stack[-1]
                     stats['messages_exchanged'] += 1
-                    current_ttl -= 1
-                    print(f"  -> [Backtrack] Beco sem saída em {current_node}. Recuando para {previous_node}")
+                    print(f"  -> [Backtrack] Beco sem saida em {current_node}. Recuando para {previous_node}")
+
 
 def interactive_menu(p2p_network):
     """Gera uma interface interativa no terminal para o usuário rodar buscas seguidas."""
